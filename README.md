@@ -2,8 +2,7 @@
 # Credipay ERP API Documentation
 
 Our APIs allow you to create customers with wallets, with or without static virtual account numbers.
-These customers can receive money through a checkout API which generates a Dynamic Virtual Account (DVA) if needed.
-The checkout endpoint can also charge a customer's wallet balance if available.
+These customers can receive money through a checkout API which generates a Dynamic Virtual Account (DVA).
 
 ## Authentication
 All requests must be authenticated using a Bearer token.
@@ -32,7 +31,7 @@ Replace `{{ERP Base URL}}` with your actual API base URL.
 {
   "paymentReference": "Reference-1007",
   "customerWalletId": "<customerWalletId>",
-  "useWalletBalance": false,
+  "useWalletBalance": false, //leave this as false to generate DVA expecting the total amount in the checkoutAmount below
   "checkoutAmount": 500,
   "accountName": "Reference 1007 Account",
   "bankCode": "090629"
