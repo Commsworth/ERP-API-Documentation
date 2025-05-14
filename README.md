@@ -80,7 +80,7 @@ OR
     "customerGroup": "Wholesaler", // Retail, Distributor or Wholesaler
     "shouldCreateWallet": true,
     "shouldCreateStaticVirtualAccount": true,
-		"parentId": "67799f2e67799f2-e685-4b75-4044-08dd5fcc9bbf"
+    "parentId": "67799f2e67799f2-e685-4b75-4044-08dd5fcc9bbf", //null if no parent
     "addressObject": {
         "addressLine1": "123 Main Street",
         "addressLine2": "Suite 4B",
