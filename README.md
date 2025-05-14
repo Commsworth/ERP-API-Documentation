@@ -53,7 +53,7 @@ Replace `{{ERP Base URL}}` with your actual API base URL.
   "firstName": "John",
   "lastName": "Doe",
   "phoneNumber": "+1234567890",
-  "gender": "Male",
+  "gender": "M",
   "email": "john@example.com"
 }
 
