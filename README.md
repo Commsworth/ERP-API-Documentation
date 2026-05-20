@@ -6,11 +6,13 @@ Our APIs allow you to create customers with wallets, with or without static virt
 
 ## Authentication
 
-All requests must be authenticated using a Bearer token.
+All requests must be authenticated using the `x-api-key` header with your secret key.
 
 ```
-"Authorization": "Bearer <your-secret-key>"
+"x-api-key": "<your-secret-key>"
 ```
+
+The secret key format includes an environment prefix and key type indicator (e.g., `Test_sk_...` for test environment, `Live_sk_...` for production). The system determines the environment (Test vs Live) from the key itself.
 
 ---
 
@@ -34,7 +36,7 @@ Generates a Dynamic Virtual Account (DVA) for a customer to receive payments. Op
 | Header         | Value                      |
 |----------------|----------------------------|
 | Content-Type   | `application/json`         |
-| Authorization  | `Bearer <secret key>`      |
+| x-api-key      | `<your-secret-key>`        |
 
 **Behavior:**
 - If `useWalletBalance` is `false`, the system generates a DVA expecting the **full** `checkoutAmount`.
@@ -114,7 +116,7 @@ Creates a new customer record with optional wallet creation, static virtual acco
 | Header         | Value                      |
 |----------------|----------------------------|
 | Content-Type   | `application/json`         |
-| Authorization  | `Bearer <secret key>`      |
+| x-api-key      | `<your-secret-key>`        |
 
 **Customer Types:**
 
@@ -259,7 +261,7 @@ Retrieves the current balance of a specific customer wallet.
 
 | Header         | Value                      |
 |----------------|----------------------------|
-| Authorization  | `Bearer <secret key>`      |
+| x-api-key      | `<your-secret-key>`        |
 
 **Error Responses:**
 
@@ -281,7 +283,7 @@ Returns the list of banks available for Dynamic Virtual Account (DVA) creation d
 
 | Header         | Value                      |
 |----------------|----------------------------|
-| Authorization  | `Bearer <secret key>`      |
+| x-api-key      | `<your-secret-key>`        |
 
 ---
 
@@ -296,7 +298,7 @@ Returns the list of banks available for external (NIP) transfers/payouts. Use th
 
 | Header         | Value                      |
 |----------------|----------------------------|
-| Authorization  | `Bearer <secret key>`      |
+| x-api-key      | `<your-secret-key>`        |
 
 ---
 
@@ -312,7 +314,7 @@ Retrieves full details for a single customer.
 
 | Header         | Value                      |
 |----------------|----------------------------|
-| Authorization  | `Bearer <secret key>`      |
+| x-api-key      | `<your-secret-key>`        |
 
 **Error Responses:**
 
@@ -334,7 +336,7 @@ Retrieves a paginated list of customers with optional filters.
 
 | Header         | Value                      |
 |----------------|----------------------------|
-| Authorization  | `Bearer <secret key>`      |
+| x-api-key      | `<your-secret-key>`        |
 
 **Query Parameters:**
 
@@ -363,7 +365,7 @@ Retrieves a paginated list of all customer wallets.
 
 | Header         | Value                      |
 |----------------|----------------------------|
-| Authorization  | `Bearer <secret key>`      |
+| x-api-key      | `<your-secret-key>`        |
 
 **Query Parameters:**
 
@@ -387,7 +389,7 @@ Retrieves paginated wallet transactions with flexible filters.
 
 | Header         | Value                      |
 |----------------|----------------------------|
-| Authorization  | `Bearer <secret key>`      |
+| x-api-key      | `<your-secret-key>`        |
 
 **Query Parameters:**
 
@@ -416,7 +418,7 @@ Retrieves detailed information about a specific wallet.
 
 | Header         | Value                      |
 |----------------|----------------------------|
-| Authorization  | `Bearer <secret key>`      |
+| x-api-key      | `<your-secret-key>`        |
 
 **Error Responses:**
 
@@ -439,7 +441,7 @@ Retrieves details of a single wallet transaction.
 
 | Header         | Value                      |
 |----------------|----------------------------|
-| Authorization  | `Bearer <secret key>`      |
+| x-api-key      | `<your-secret-key>`        |
 
 **Error Responses:**
 
@@ -462,7 +464,7 @@ Transfers funds from a customer's wallet to **either** another wallet (internal)
 | Header         | Value                      |
 |----------------|----------------------------|
 | Content-Type   | `application/json`         |
-| Authorization  | `Bearer <secret key>`      |
+| x-api-key      | `<your-secret-key>`        |
 
 **Behavior:**
 - **Wallet-to-Wallet:** Set `destinationWalletId` to the target wallet's UUID and leave `externalAccountInfo` as `null`. Both wallets must belong to the same business. Transfer is instant.
@@ -564,7 +566,7 @@ Deletes a customer's wallet. If the wallet has a remaining balance, funds are tr
 | Header         | Value                      |
 |----------------|----------------------------|
 | Content-Type   | `application/json`         |
-| Authorization  | `Bearer <secret key>`      |
+| x-api-key      | `<your-secret-key>`        |
 
 **Request Body:**
 
@@ -606,7 +608,7 @@ Deletes a customer record. If the customer has a wallet with a non-zero balance,
 | Header         | Value                      |
 |----------------|----------------------------|
 | Content-Type   | `application/json`         |
-| Authorization  | `Bearer <secret key>`      |
+| x-api-key      | `<your-secret-key>`        |
 
 **Request Body:**
 
