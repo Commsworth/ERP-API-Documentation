@@ -644,6 +644,65 @@ Deletes a customer record. If the customer has a wallet with a non-zero balance,
 
 ---
 
+## Simulate Fund Transfer (Test Environment Only)
+
+Simulates an inbound bank transfer to a virtual account. Use this to test the collection flow end-to-end without making a real bank transfer.
+
+- **Method:** `POST`
+- **URL:** `{{Base URL}}/api/v1/Gateway/simulate-fund-transfer`
+
+> **⚠️ Test only.** This endpoint is hardcoded to the test environment and will reject calls if the server is running in Production mode.
+
+**Headers:**
+
+| Header         | Value                      |
+|----------------|----------------------------|
+| Content-Type   | `application/json`         |
+| x-api-key      | `<your-secret-key>`        |
+
+**Request Body:**
+
+```json
+{
+  "recipientAccountNumber": "9000119338",
+  "amount": 50000
+}
+```
+
+| Field                    | Type    | Required | Description |
+|--------------------------|---------|----------|-------------|
+| `recipientAccountNumber` | string  | Yes      | The static VA or checkout-generated DVA account number to fund |
+| `amount`                 | decimal | Yes      | Amount in Naira (supports kobo precision, e.g. `2399.99`) |
+
+**Success Response (200 OK):**
+
+```json
+{
+  "isSuccess": true,
+  "value": null,
+  "error": null,
+  "responseCode": null
+}
+```
+
+**Failure Response (if called in Production):**
+
+```json
+{
+  "isSuccess": false,
+  "value": null,
+  "error": "99",
+  "responseCode": null
+}
+```
+
+**Behavior:**
+- Triggers the same internal flow as a real bank transfer — the customer's wallet is credited and a `Collection.CollectionSuccess` webhook is fired.
+- The `amount` is converted to kobo internally before calling the bank provider's test sandbox.
+- Works for both static VAs (permanent account numbers) and checkout DVAs (transaction-scoped account numbers).
+
+---
+
 ## Webhooks
 
 The system sends webhook notifications to your configured URL for certain events:
