@@ -1,6 +1,6 @@
 # Credipay ERP API Documentation
 
-Our APIs allow you to create customers with wallets, with or without static virtual account numbers. These customers can receive money through a checkout API which generates a Dynamic Virtual Account (DVA). Additionally, you can perform wallet-to-wallet transfers or wallet-to-external-bank payouts.
+Our APIs allow you to create customers with wallets, with or without static virtual account numbers. These customers can receive money through a checkout API which generates a Dynamic Virtual Account (DVA). Additionally, you can perform wallet-to-wallet transfers or wallet-to-external-bank payouts, and you can re-query payout status by your `transactionReference`.
 
 ---
 
@@ -39,12 +39,28 @@ Generates a Dynamic Virtual Account (DVA) for a customer to receive payments. Op
 | x-api-key      | `<your-secret-key>`        |
 
 **Behavior:**
-- If `useWalletBalance` is `false`, the system generates a DVA expecting the **full** `checkoutAmount`.
+- Only **safeguarded wallets** are eligible for ERP checkout.
+- Wallets created by `create-customer` with `shouldCreateWallet = true` already satisfy this requirement because the ERP service creates them as safeguarded wallets.
+- The optional `bearer` field controls who absorbs the ERP inflow charge for the DVA funding leg:
+  - `Customer` (default): the generated DVA is grossed up so the payer funds both principal and charge.
+  - `Merchant`: the generated DVA expects only the requested checkout amount; the merchant absorbs the charge separately.
+- If `useWalletBalance` is `false`, the system generates a DVA using the selected `bearer` rule.
 - If `useWalletBalance` is `true`:
   - The system checks the customer's wallet balance.
   - If the wallet balance **covers the full amount**, the checkout succeeds immediately (no DVA is generated; `expectedAmount` will be `0`).
-  - If the wallet balance is **less than** `checkoutAmount`, a DVA is generated for the **remaining difference** (`checkoutAmount - walletBalance`).
-- A webhook notification (`collection.initiated`) is sent when the DVA account is created.
+  - If the wallet balance is **less than** `checkoutAmount`, a DVA is generated for the remaining amount using the selected `bearer` rule.
+- `checkoutAmount` is the amount the business wants to make available through the checkout flow.
+  - For `bearer = Customer`, it is treated as the **target net value** after charge.
+  - For `bearer = Merchant`, it is treated as the funded and credited amount; the merchant absorbs the charge separately.
+- The response now returns:
+  - `expectedAmount`: the **gross** amount the payer must transfer into the generated DVA
+  - `chargeAmount`: the ERP inflow charge embedded in that funding target
+  - `netAmount`: the amount that will actually be credited to the customer wallet from the DVA funding leg
+  - `bearer`: the resolved fee bearer for the checkout
+- The supplied `bankCode` must exist in the Available VA Banks list.
+- When Dynamic VA routing is configured for the calling business/partner, that `bankCode` is used to resolve the eligible provider/bank mapping for account creation, and the returned `accountInfo.bankName` / `accountInfo.bankCode` reflect the routed provider response.
+- If no Dynamic VA route is configured, checkout falls back to the default 9jaPay account-creation flow.
+- A webhook notification is sent when the DVA account is created.
 
 **Request Body:**
 
@@ -53,9 +69,10 @@ Generates a Dynamic Virtual Account (DVA) for a customer to receive payments. Op
   "paymentReference": "Reference-1007",       // Required. Your unique payment reference. Must not be reused.
   "customerWalletId": "<customerWalletId>",   // Required. UUID of the customer's wallet.
   "useWalletBalance": false,                  // Required. Set to true to debit wallet first, false for full DVA.
-  "checkoutAmount": 500,                      // Required. Total amount expected for this checkout (in Naira).
+  "checkoutAmount": 500,                      // Required. Requested checkout amount. Net target for Customer bearer; funded amount for Merchant bearer.
   "accountName": "Reference 1007 Account",    // Required. Name to display on the generated DVA.
-  "bankCode": "090629"                        // Required. Bank code from the available VA banks list (see "Get Available VA Banks").
+  "bankCode": "090629",                      // Required. Bank code from the available VA banks list (see "Get Available VA Banks").
+  "bearer": "Customer"                       // Optional. Enum: "Customer" or "Merchant". Defaults to "Customer".
 }
 ```
 
@@ -68,12 +85,15 @@ Generates a Dynamic Virtual Account (DVA) for a customer to receive payments. Op
   "message": "Payment account created successfully",
   "data": {
     "paymentReference": "Reference-1007",
-    "expectedAmount": 500,
+    "expectedAmount": 525,
+    "chargeAmount": 25,
+    "netAmount": 500,
+    "bearer": "Customer",
     "accountInfo": {
       "accountNumber": "1234567890",
-      "bankName": "9jaPay MFB",
+      "bankName": "Providus Bank",
       "accountName": "Reference 1007 Account",
-      "bankCode": "999916"
+      "bankCode": "000023"
     }
   }
 }
@@ -89,18 +109,28 @@ Generates a Dynamic Virtual Account (DVA) for a customer to receive payments. Op
   "data": {
     "paymentReference": "Reference-1007",
     "expectedAmount": 0,
+    "chargeAmount": 0,
+    "netAmount": 0,
+    "bearer": "Customer",
     "accountInfo": null
   }
 }
 ```
 
+> **Example (`bearer = Customer`):** if the requested `checkoutAmount` is `500` and the configured ERP inflow charge is `25`, the payer must fund `525` and the safeguarded customer wallet receives `500`.
+
+> **Example (`bearer = Merchant`):** if the requested `checkoutAmount` is `500` and the configured ERP inflow charge is `25`, the payer funds `500`, the customer wallet receives `500`, and the merchant absorbs the `25` charge.
+
 **Error Responses:**
 
 | Code | Scenario                        |
 |------|---------------------------------|
+| 403  | Wallet is not safeguarded       |
 | 400  | Invalid bank code               |
 | 404  | Wallet not found                |
 | 500  | Payment reference already used or provider error |
+
+> **Implementation note:** When the source wallet is not a safeguarded wallet, the service sets `responseCode` to `403` with message `Checkout is only available for safeguarded wallets`, but the current controller still returns HTTP `400 Bad Request`. Integrators should inspect the response body's `responseCode` as well as the transport status.
 
 ---
 
@@ -121,6 +151,11 @@ Creates a new customer record with optional wallet creation, static virtual acco
 **Customer Types:**
 
 You can create either an **Individual** or **Business** customer. Provide **only one** of `individualInfo` or `businessInfo` in the payload. Do not supply both.
+
+**Behavior Notes:**
+- If `shouldCreateWallet` is `false`, the customer is still created successfully and `walletDetails` will be `null`.
+- If `shouldCreateWallet` is `true`, the wallet created by this ERP API is a **safeguarded wallet**.
+- If `shouldCreateStaticVirtualAccount` is `true`, static virtual account creation is **best effort**. The customer creation call still returns `201` even if provider account creation fails; in that case `walletDetails.virtualAccountInfo` will be `null`.
 
 **Request Body (Full Example — Business Customer):**
 
@@ -245,7 +280,8 @@ You can create either an **Individual** or **Business** customer. Provide **only
 |------|----------------------------------------------------------|
 | 400  | Missing required fields, invalid email/phone, duplicate email |
 | 404  | Parent customer not found or parent is not a Distributor |
-| 500  | Virtual account creation failure (customer still created)|
+
+> **Note:** Static virtual account creation failure does **not** fail the customer creation call. The API still returns `201 Created`, but `walletDetails.virtualAccountInfo` may be `null`.
 
 ---
 
@@ -263,6 +299,20 @@ Retrieves the current balance of a specific customer wallet.
 |----------------|----------------------------|
 | x-api-key      | `<your-secret-key>`        |
 
+**Success Response (200):**
+
+```json
+{
+  "status": true,
+  "responseCode": "200",
+  "message": "Wallet balance retrieved successfully",
+  "data": {
+    "balance": 12500.75,
+    "currencyCode": "NGN"
+  }
+}
+```
+
 **Error Responses:**
 
 | Code | Scenario          |
@@ -275,6 +325,10 @@ Retrieves the current balance of a specific customer wallet.
 ### 4. Get Available VA Banks
 
 Returns the list of banks available for Dynamic Virtual Account (DVA) creation during checkout. Use these bank codes in the Checkout endpoint's `bankCode` field.
+
+- The response is route-aware for the calling business/partner.
+- If routing is configured, only bank mappings eligible for the current Dynamic VA routes are returned.
+- If no routing is configured, the endpoint falls back to the default 9jaPay-backed bank list.
 
 - **Method:** `GET`
 - **URL:** `{{ERP Base URL}}/api/v1/ERP/available-va-banks`
@@ -315,6 +369,11 @@ Retrieves full details for a single customer.
 | Header         | Value                      |
 |----------------|----------------------------|
 | x-api-key      | `<your-secret-key>`        |
+
+**Response Shape:**
+- `data.customerData`: core customer profile
+- `data.addresses`: delivery addresses list
+- `data.walletDetails`: wallet summary, current `availableBalance`, and `virtualAccountInfo`
 
 **Error Responses:**
 
@@ -420,6 +479,12 @@ Retrieves detailed information about a specific wallet.
 |----------------|----------------------------|
 | x-api-key      | `<your-secret-key>`        |
 
+**Response Shape:**
+- Core wallet fields (`id`, `customerId`, `customerNumber`, `accountName`, `currencyCode`)
+- Credit configuration (`creditLimit`, `tenureInDays`, `limitSpend`, `spendLimit`, `limitScope`)
+- `availableBalance`
+- `virtualAccountInfo`
+
 **Error Responses:**
 
 | Code | Scenario          |
@@ -452,7 +517,59 @@ Retrieves details of a single wallet transaction.
 
 ---
 
-### 12. Wallet Payout
+### 12. Get Transfer Status by Reference
+
+Looks up the current status of a payout using the same `transactionReference` you originally supplied to `walletpayout`. This is safe to call repeatedly for timeout recovery and reconciliation.
+
+- **Method:** `GET`
+- **URL:** `{{ERP Base URL}}/api/v1/ERP/transfer-status/<reference>`
+- **Path Parameter:** `reference` — your original payout `transactionReference`.
+
+**Headers:**
+
+| Header         | Value                      |
+|----------------|----------------------------|
+| x-api-key      | `<your-secret-key>`        |
+
+**Success Response (200):**
+
+```json
+{
+  "status": true,
+  "responseCode": "200",
+  "message": "Transfer status retrieved successfully",
+  "data": {
+    "id": "6d1f5a11-1a66-4af0-b915-6d554f72f253",
+    "walletId": "f1e2d3c4-b5a6-7890-abcd-ef1234567890",
+    "reference": "PAY-00020",
+    "internalReference": "PAY-00020",
+    "sourceAccountNumber": "1234567890",
+    "sourceAccountName": "John Doe Wallet",
+    "sourceBank": "Credipay",
+    "destinationAccountNumber": "0123456789",
+    "destinationAccountName": "Jane Doe",
+    "destinationBank": "First Bank of Nigeria",
+    "sessionId": "WalletPayout_PAY-00020202501011030",
+    "amount": 1500,
+    "narration": "Supplier payment",
+    "transactionDate": "2025-01-15T10:30:00Z",
+    "transactionType": "Debit",
+    "status": "Pending"
+  }
+}
+```
+
+**Error Responses:**
+
+| Code | Scenario                          |
+|------|-----------------------------------|
+| 400  | Missing or empty reference        |
+| 404  | No transfer found for reference   |
+| 500  | Internal error                    |
+
+---
+
+### 13. Wallet Payout
 
 Transfers funds from a customer's wallet to **either** another wallet (internal) or an external bank account (NIP transfer).
 
@@ -467,11 +584,18 @@ Transfers funds from a customer's wallet to **either** another wallet (internal)
 | x-api-key      | `<your-secret-key>`        |
 
 **Behavior:**
-- **Wallet-to-Wallet:** Set `destinationWalletId` to the target wallet's UUID and leave `externalAccountInfo` as `null`. Both wallets must belong to the same business. Transfer is instant.
-- **Wallet-to-External Bank:** Set `destinationWalletId` to `null` and populate `externalAccountInfo` with the bank account details. A NIP name enquiry is performed for validation before transfer. If the transfer call to the payment gateway fails, the transaction is queued for automatic retry (up to 3 retries, 5 minutes apart).
+- Only **safeguarded wallets** are eligible for payout.
+- **Wallet-to-Wallet:** Set `destinationWalletId` to the target wallet's UUID and leave `externalAccountInfo` as `null`. Both wallets must belong to the same business. Transfer is instant and no transfer fee applies.
+- **Wallet-to-External Bank:** Set `destinationWalletId` to `null` and populate `externalAccountInfo` with the bank account details. A NIP name enquiry is performed for validation before transfer.
+- External bank payouts attract a **tiered transfer fee** looked up from Credipay's `FundTransferCharges` table.
+- The optional `bearer` field controls who absorbs that fee:
+  - `Customer` (default): the source wallet is debited `amount + transferCharge`, while the beneficiary receives exactly `amount`.
+  - `Merchant`: the source wallet is debited exactly `amount`, while the transfer fee is debited separately from the merchant's settle-able pool.
+- If the provider transfer call does not return an immediate success, the payout is recorded as pending and queued for automatic requery for up to **6 retries at 10-minute intervals**.
 - A distributed lock prevents concurrent payouts from the same wallet.
-- Duplicate `transactionReference` values for the same source wallet are rejected.
-- A webhook notification is sent on successful completion.
+- Reusing the same `transactionReference` for the same source wallet is treated as an **idempotent replay**. The API returns success and does not duplicate the payout.
+- Use `GET /api/v1/ERP/transfer-status/<reference>` to reconcile delayed or previously timed-out payout calls.
+- A payout status webhook is sent on immediate success and after background requery resolution.
 
 **Request Body (Wallet-to-Wallet Transfer):**
 
@@ -484,7 +608,8 @@ Transfers funds from a customer's wallet to **either** another wallet (internal)
     "externalAccountInfo": null                   // Must be null for internal transfers.
   },
   "amount": 50,                                   // Required. Amount to transfer (in Naira). Must not exceed source balance.
-  "narration": "Payment for invoice #123"         // Optional. Description/memo for the transaction. Truncated to 50 chars for NIP.
+  "narration": "Payment for invoice #123",        // Optional. Description/memo for the transaction. Truncated to 50 chars for NIP.
+  "bearer": "Customer"                           // Optional. Ignored for internal transfers.
 }
 ```
 
@@ -504,7 +629,8 @@ Transfers funds from a customer's wallet to **either** another wallet (internal)
     }
   },
   "amount": 1500,                                // Required. Amount to transfer (in Naira).
-  "narration": "Supplier payment"                // Optional. Truncated to 50 characters for NIP transfers.
+  "narration": "Supplier payment",               // Optional. Truncated to 50 characters for NIP transfers.
+  "bearer": "Merchant"                           // Optional. Enum: "Customer" or "Merchant". Defaults to "Customer".
 }
 ```
 
@@ -543,20 +669,33 @@ Transfers funds from a customer's wallet to **either** another wallet (internal)
 }
 ```
 
+**Success Response (Idempotent Replay):**
+
+```json
+{
+  "status": true,
+  "responseCode": "200",
+  "message": "Transfer already processed (original status: Successful). Use GET /api/v1/ERP/transfer-status/{reference} for full details.",
+  "data": "PAY-00020"
+}
+```
+
 **Error Responses:**
 
 | Code | Scenario                                                         |
 |------|------------------------------------------------------------------|
-| 400  | Insufficient balance, duplicate reference, invalid account info, missing required fields |
+| 400  | Insufficient balance, insufficient balance to cover transfer charge, invalid account info, missing required fields |
 | 404  | Source wallet not found, destination wallet not found             |
 | 409  | Concurrent transaction in progress (lock conflict)               |
 | 500  | Internal processing error                                        |
 
+> **Implementation note:** When the source wallet is not a safeguarded wallet, the service sets `responseCode` to `403` with message `Wallet payout is only available for safeguarded wallets`, but the current controller still returns HTTP `400 Bad Request`. Integrators should inspect the response body's `responseCode` as well as the transport status.
+
 ---
 
-### 13. Delete Wallet
+### 14. Delete Wallet
 
-Deletes a customer's wallet. If the wallet has a remaining balance, funds are transferred to the business account before deletion.
+Deletes a customer's wallet **only if its balance is zero**. The wallet is soft-deleted; the API does **not** automatically sweep remaining funds to a business account.
 
 - **Method:** `DELETE`
 - **URL:** `{{ERP Base URL}}/api/v1/ERP/delete-wallet`
@@ -582,21 +721,32 @@ Deletes a customer's wallet. If the wallet has a remaining balance, funds are tr
 ```json
 {
   "status": true,
-  "message": "Wallet deleted successfully",
+  "responseCode": "200",
+  "message": "Wallet deleted successfully.",
   "data": {
     "customerWalletId": "f1e2d3c4-b5a6-7890-abcd-ef1234567890",
-    "transferredAmount": 250.00,
-    "fundsTransferred": true,
-    "businessAccountNumber": "1234567890",
-    "message": "Remaining funds transferred to business account",
+    "transferredAmount": 0,
+    "fundsTransferred": false,
+    "businessAccountNumber": null,
+    "message": "Wallet deleted successfully with zero balance",
     "dateDeleted": "2025-01-15T14:30:00Z"
   }
 }
 ```
 
+**Error Responses:**
+
+| Code | Scenario                                                            |
+|------|---------------------------------------------------------------------|
+| 400  | Wallet already deleted, or wallet balance is greater than zero      |
+| 404  | Wallet not found or not owned by the calling business               |
+| 500  | Internal deletion error                                             |
+
+> **Implementation note:** The current controller returns HTTP `400 Bad Request` for all non-success `delete-wallet` responses. Inspect the response body's `responseCode` to distinguish `404` vs `500` semantics.
+
 ---
 
-### 14. Delete Customer
+### 15. Delete Customer
 
 Deletes a customer record. If the customer has a wallet with a non-zero balance, deletion will **fail**. If the wallet has zero balance, it will be deleted along with the customer.
 
@@ -624,11 +774,12 @@ Deletes a customer record. If the customer has a wallet with a non-zero balance,
 ```json
 {
   "status": true,
-  "message": "Customer deleted successfully",
+  "responseCode": "200",
+  "message": "Customer deleted successfully. Customer wallet was also deleted.",
   "data": {
     "customerId": "a1b2c3d4-e5f6-7890-abcd-ef1234567890",
     "walletDeleted": true,
-    "message": "Customer and associated wallet deleted",
+    "message": "Customer deleted successfully. Customer wallet was also deleted.",
     "dateDeleted": "2025-01-15T14:30:00Z",
     "reason": "Duplicate account"
   }
@@ -639,8 +790,11 @@ Deletes a customer record. If the customer has a wallet with a non-zero balance,
 
 | Code | Scenario                                          |
 |------|---------------------------------------------------|
-| 400  | Customer has wallet with non-zero balance         |
-| 422  | Unprocessable entity (service returned null)      |
+| 400  | Customer already deleted, or customer has wallet with non-zero balance |
+| 404  | Customer not found or not owned by the calling business |
+| 500  | Internal deletion error                           |
+
+> **Implementation note:** The current controller returns HTTP `400 Bad Request` for all non-success `delete-customer` responses. Inspect the response body's `responseCode` to distinguish `404` vs `500` semantics.
 
 ---
 
@@ -672,7 +826,7 @@ Simulates an inbound bank transfer to a virtual account. Use this to test the co
 | Field                    | Type    | Required | Description |
 |--------------------------|---------|----------|-------------|
 | `recipientAccountNumber` | string  | Yes      | The static VA or checkout-generated DVA account number to fund |
-| `amount`                 | decimal | Yes      | Amount in Naira (supports kobo precision, e.g. `2399.99`) |
+| `amount`                 | decimal | Yes      | Amount in **kobo** to send to the Pay9ja sandbox (for example, `50000` = NGN `500.00`) |
 
 **Success Response (200 OK):**
 
@@ -698,20 +852,46 @@ Simulates an inbound bank transfer to a virtual account. Use this to test the co
 
 **Behavior:**
 - Triggers the same internal flow as a real bank transfer — the customer's wallet is credited and a `Collection.CollectionSuccess` webhook is fired.
-- The `amount` is converted to kobo internally before calling the bank provider's test sandbox.
+- The request amount is forwarded to the Pay9ja sandbox as-is.
+- Because inbound Pay9ja webhook amounts are normalized from **kobo to Naira** when Credipay processes the callback, callers should send the simulation amount in **kobo**. For example, sending `500` simulates NGN `5.00`, while sending `50000` simulates NGN `500.00`.
 - Works for both static VAs (permanent account numbers) and checkout DVAs (transaction-scoped account numbers).
 
 ---
 
 ## Webhooks
 
-The system sends webhook notifications to your configured URL for certain events:
+The ERP flows trigger webhook notifications to your configured URL.
 
-| Event Type              | Trigger                                              |
-|-------------------------|------------------------------------------------------|
-| `collection.initiated`  | When a DVA is created during checkout                |
-| `payout.successful`     | When a wallet payout completes successfully          |
-| `payout.failed`         | When a wallet payout fails                           |
+| Flow | Trigger | Current outbound `message` value |
+|------|---------|----------------------------------|
+| Checkout account creation | When a checkout DVA is created | `Collection process has started.` |
+| Wallet payout status | When a payout completes immediately, or when background requery later resolves it | `payout_status_event` |
+
+**Checkout webhook payload highlights:**
+- `amount` (gross amount expected to be funded)
+- `charge`
+- `netAmount`
+- `bearer`
+- `paymentReference`
+- `transactionReference`
+- `paymentChannel`
+- `currencyCode`
+- `paymentRoute`
+- `accountInfo`
+- `payerInfo`
+
+**Payout webhook payload highlights:**
+- `amount`
+- `transactionReference`
+- `transactionStatus`
+- `sourceWalletId`
+- `benficiaryDetails`
+- `transferCharge`
+- `bearer`
+
+**Collection success webhook note:**
+- For ERP safeguarded wallet inflows, the incoming collection can now contain a non-zero `charge` while the wallet is credited with the net amount after that charge when `bearer = Customer`.
+- For checkout DVAs with `bearer = Merchant`, the customer wallet still receives the full funded amount while the merchant absorbs the fee separately.
 
 Webhook payloads are signed using your secret key for verification.
 
